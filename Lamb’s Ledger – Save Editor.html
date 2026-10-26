@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lamb’s Ledger – Save Editor</title>
+<style>
+:root{--bg:#f1e9dc;--sf:#fbf6ec;--tx:#2a1b2e;--mu:#7a6b7d;--ac:#a3202b;--ln:#d9ccb8;--ok:#3f7a3a;color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1b1220;--sf:#271a2d;--tx:#efe6d8;--mu:#a596a8;--ac:#e0505a;--ln:#3d2c44;--ok:#8fbf7f;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#1b1220;--sf:#271a2d;--tx:#efe6d8;--mu:#a596a8;--ac:#e0505a;--ln:#3d2c44;--ok:#8fbf7f;color-scheme:dark}
+*{box-sizing:border-box}html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;max-width:760px;margin-inline:auto;padding:0 14px 90px}
+h1{font:700 30px/1.1 Palatino,"Palatino Linotype",Georgia,serif;margin:22px 0 4px}
+h2{font:700 20px Palatino,Georgia,serif;margin:22px 0 8px}
+p{margin:6px 0}.mu{color:var(--mu);font-size:14px}
+.card{background:var(--sf);border:1px solid var(--ln);border-radius:10px;padding:12px;margin:10px 0}
+.row{display:flex;gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid var(--ln)}
+.row:last-child{border:0}.row>label,.row>.k{flex:1;min-width:0;overflow-wrap:anywhere;font-size:14px}
+input[type=text],input[type=number],input[type=search],select,textarea{background:var(--bg);color:var(--tx);border:1px solid var(--ln);border-radius:7px;padding:9px;font:inherit;min-width:0}
+input[type=number]{width:120px}input[type=text]{width:140px}input[type=search]{width:100%}
+input[type=checkbox]{width:24px;height:24px;accent-color:var(--ac)}
+textarea{width:100%;height:50vh;font:12px/1.4 ui-monospace,Menlo,monospace}
+button{font:inherit;font-weight:600;border:1px solid var(--ac);background:transparent;color:var(--ac);border-radius:8px;padding:9px 12px;min-height:40px}
+button.p{background:var(--ac);color:#fff}button:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid var(--ac);outline-offset:2px}
+nav{display:flex;gap:6px;overflow-x:auto;position:sticky;top:env(safe-area-inset-top,0px);background:var(--bg);padding:8px 0;z-index:5}
+nav button{white-space:nowrap}nav button.on{background:var(--ac);color:#fff}
+.bar{position:fixed;left:0;right:0;bottom:0;background:var(--sf);border-top:1px solid var(--ln);padding:10px 14px calc(10px + env(safe-area-inset-bottom,0px));display:flex;gap:8px;align-items:center;justify-content:center}
+.bar span{flex:1;font-size:14px;color:var(--mu)}
+.err{color:var(--ac);font-weight:600}.k small{display:block;color:var(--mu);font-size:11px;font-weight:400}.ic{display:inline-flex;width:36px;height:36px;flex:none;align-items:center;justify-content:center;font-size:22px;background:var(--bg);border:1px solid var(--ln);border-radius:9px}[hidden]{display:none!important}details{margin:6px 0}summary{cursor:pointer;font-weight:600;padding:6px 0}
+.tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}
+</style></head><body>
+<h1>Lamb’s Ledger</h1>
+<p class="mu">A save editor for Cult of the Lamb. Everything runs in your browser; your file never leaves your phone.</p>
+<div id="app"></div>
+<div class="bar" id="bar" hidden><span id="st">No changes yet</span><button id="rs">Reset</button><button id="bk">Backup</button><button class="p" id="sv">Save file</button></div>
+<script>
+let D=null,raw='',fname='slot_0.json',edits=0,tab='quick',L={},rawBuf=null,chain=[],bom=false,zb=null;
+try{L=JSON.parse(localStorage.getItem('lbl')||'{}')}catch(e){}
+const $=s=>document.querySelector(s);
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function*walk(o,p=[]){if(o&&typeof o==='object'){for(const k of Object.keys(o))yield*walk(o[k],p.concat(Array.isArray(o)?+k:k))}else yield[p,o]}
+const get=p=>p.reduce((o,k)=>o[k],D);
+const key=p=>p.join('.');
+function put(p,v){get(p.slice(0,-1))[p[p.length-1]]=v;edits++;stat()}
+function stat(){$('#st').textContent=edits?edits+' change'+(edits>1?'s':'')+' not saved':'No changes yet'}
+function inp(p,v){const a=`data-p="${esc(JSON.stringify(p))}"`;
+ if(typeof v==='boolean')return`<input type="checkbox" ${a} data-t="b" ${v?'checked':''} aria-label="${esc(key(p))}">`;
+ if(typeof v==='number')return`<input type="number" step="any" inputmode="decimal" ${a} data-t="n" value="${v}" aria-label="${esc(key(p))}">`;
+ if(v===null)return'<i class="mu">null</i>';
+ return`<input type="text" ${a} data-t="s" value="${esc(v)}" aria-label="${esc(key(p))}">`}
+document.addEventListener('change',e=>{const t=e.target,d=t.dataset;
+ if(d.lbl){L[d.lbl]=t.value;try{localStorage.setItem('lbl',JSON.stringify(L))}catch(x){}return}
+ if(d.skin!==undefined){setSkin(+d.skin,t.value,t);return}
+ if(d.copy!==undefined){if(t.value!=='')copyLook(+d.copy,+t.value,t);t.value='';return}
+ if(d.chk){const a=D[d.chk],id=isNaN(Number(d.id))?d.id:Number(d.id),i=a.indexOf(id);if(t.checked&&i<0)a.push(id);if(!t.checked&&i>=0)a.splice(i,1);edits++;stat();return}
+ if(!d.p)return;const p=JSON.parse(d.p);
+ const v=d.t==='b'?t.checked:d.t==='n'?Number(t.value):d.t==='l'?t.value.split(',').map(s=>s.trim()).filter(s=>s!=='').map(s=>d.s==='1'?s:Number(s)):t.value;
+ if(d.t==='n'&&(t.value===''||isNaN(v)))return;
+ if(d.t==='l'&&v.some(x=>typeof x==='number'&&isNaN(x)))return;
+ put(p,v);if(p[0]==='items'&&p[p.length-1]==='quantity')sync(get(p.slice(0,-1)))});
+
+// ---- detectors ----
+function find(test){const out=[];(function rec(o,p){if(!o||typeof o!=='object')return;
+ if(Array.isArray(o)&&o.length&&o.every(x=>x&&typeof x==='object'&&!Array.isArray(x))&&test(o)){out.push(p);return}
+ for(const k of Object.keys(o))rec(o[k],p.concat(Array.isArray(o)?+k:k))})(D,[]);return out}
+const kk=(o,re)=>Object.keys(o).find(k=>re.test(k));
+const invs=()=>find(a=>a.every(x=>kk(x,/^type$/i)&&kk(x,/^quantity$/i))).filter(p=>p.length<2);
+const fols=()=>find(a=>a.length&&a.every(x=>kk(x,/^name$/i)&&Object.keys(x).length>5)).filter(p=>p.length<2);
+
+// ---- tabs ----
+const PRE=[['Currency',/gold|coin/i],['Devotion and faith',/devotion|faith|fervou?r/i],['Health and hearts',/health|heart/i],['Food and hunger',/food|hunger|meal/i],['Doctrine and rituals',/doctrine|ritual/i],['Days and time',/day|time/i]];
+function quick(){let h='<p class="mu">Fields found by name. Names depend on the game version, so check the Search tab if something is missing.</p>';
+ const leaves=[...walk(D)].filter(([p,v])=>typeof v==='number'&&p.length<=3&&typeof p[p.length-1]==='string');
+ for(const[n,re]of PRE){const m=leaves.filter(([p])=>re.test(p[p.length-1])).slice(0,14);if(!m.length)continue;
+  h+=`<h2>${n}</h2><div class="card">`+m.map(([p,v])=>`<div class="row"><span class="k">${esc(key(p))}</span>${inp(p,v)}</div>`).join('')+'</div>'}
+ return h+(h.includes('card')?'':'<div class="card">No common fields matched. Open Search to browse every value.</div>')}
+
+function res(){const ps=invs();if(!ps.length)return'<div class="card">No item list found. Open Search and look for entries with “quantity”.</div>';
+ return'<p class="mu">Item types appear as numbers. Match each one to your in-game count, then label it. Labels stay on this device only.</p>'+ps.map((p,ix)=>{
+  const a=get(p);return`<h2>${esc(key(p))||'Items'} (${a.length})</h2>
+  <div class="tools"><input type="number" id="bulk${ix}" value="999" style="width:100px"><button data-act="all" data-ix="${ix}">Set all to this</button><button data-act="raise" data-ix="${ix}">Raise only lower ones</button></div><div class="tools"><input type="number" id="nt${ix}" placeholder="Item ID" style="width:100px"><input type="number" id="nq${ix}" value="999" style="width:100px"><button data-act="add" data-ix="${ix}">Add or set item</button></div>
+  <div class="card">`+a.map((it,i)=>{const tk=kk(it,/^type$/i),qk=kk(it,/^quantity$/i),id='t'+it[tk];
+   return`<div class="row"><input type="text" style="width:110px" placeholder="${it[tk]===20?'Gold?':'Type '+esc(it[tk])}" value="${esc(L[id]||'')}" data-lbl="${id}" aria-label="Label for type ${esc(it[tk])}">${inp(p.concat(i,qk),it[qk])}<button data-act="max" data-p="${esc(JSON.stringify(p.concat(i,qk)))}">Max</button></div>`}).join('')+'</div>'}).join('')}
+
+function fol(){const ps=fols();if(!ps.length)return'<div class="card">No follower list found. Try Search and look for “Name”.</div>';
+ const a=get(ps[0]),p0=ps[0];const nums=[...new Set(a.flatMap(f=>Object.keys(f).filter(k=>typeof f[k]==='number')))].sort();
+ return`<h2>${a.length} followers</h2><div class="card"><p class="mu">Change one stat for every follower at once.</p><div class="tools"><select id="fk">${nums.map(k=>`<option>${esc(k)}</option>`).join('')}</select><input type="number" id="fv" value="0" style="width:100px"><button data-act="fol">Apply to all</button></div><div class="tools"><button data-act="heal">Heal and cheer everyone</button></div></div>`+
+ a.map((f,i)=>{const nk=kk(f,/^name$/i);return`<details class="card"><summary>${esc(f[nk])}</summary>`+Object.keys(f).filter(k=>f[k]===null||typeof f[k]!=='object').map(k=>`<div class="row"><span class="k">${esc(k)}</span>${inp(p0.concat(i,k),f[k])}</div>`).join('')+'</details>'}).join('')}
+
+let q='',numOnly=false;
+function srch(){return`<input type="search" id="q" placeholder="Search field names, e.g. gold, level, unlock" value="${esc(q)}" aria-label="Search fields"><div class="tools"><label><input type="checkbox" id="no" ${numOnly?'checked':''}> Numbers only</label></div><div id="sr">${srRows()}</div>`}
+function srRows(){const s=q.toLowerCase();let n=0,h='';
+ for(const[p,v]of walk(D)){if(numOnly&&typeof v!=='number')continue;const k=key(p);if(s&&!k.toLowerCase().includes(s))continue;if(++n>120)break;h+=`<div class="row"><span class="k">${esc(k)}</span>${inp(p,v)}</div>`}
+ return n?(n>120?'<p class="mu">Showing first 120 matches. Type more to narrow.</p>':'')+`<div class="card">${h}</div>`:'<div class="card">Nothing matches. Try a shorter word.</div>'}
+
+function rawT(){return`<p class="mu">Advanced: edit the whole file as text. Changes apply when you tap Apply.</p><textarea id="rw" spellcheck="false">${esc(JSON.stringify(D,null,2))}</textarea><div class="tools"><button class="p" data-act="raw">Apply text</button></div><p id="re" class="err"></p>`}
+
+function draw(){const T=[['quick','Quick'],['res','Items'],['fol','Followers'],['unl','Unlocks'],['rev','Review'],['srch','Search'],['rawT','Raw']];
+ $('#app').innerHTML=`<nav>${T.map(([k,n])=>`<button class="${tab===k?'on':''}" data-tab="${k}">${n}</button>`).join('')}</nav><div id="pane">${({quick:quick2,res:res2,fol:fol2,unl:unl2,rev,srch,rawT})[tab]()}</div>`}
+
+// ---- start screen ----
+function start(msg){$('#app').innerHTML=`<div class="card"><h2 style="margin-top:0">Open your save</h2>
+<p>Pick your save file (for example <b>slot_0</b>). Close the game first and keep a copy of the original.</p><p class="mu">Opens Cult of the Lamb port saves (slot_0 and meta_0), plus plain JSON, gzip, zlib, base64 and MessagePack, and writes the same format back. Encrypted saves cannot be opened.</p>
+${msg?`<p class="err">${msg}</p>`:''}<p><input type="file" id="f" accept=".json,.txt,.save,*/*"></p></div>
+<div class="card"><b>Tips</b><p class="mu">Android hides other apps’ folders on newer versions, so you may need a file manager that can reach the game’s data folder. After saving, copy the edited file back over the original, keeping its name. Back up first, and use the Backup button.</p></div>`;
+ $('#f').onchange=async e=>{const f=e.target.files[0];if(!f)return;fname=f.name;rawBuf=new Uint8Array(await f.arrayBuffer());
+  try{const r=await load(rawBuf);D=r.D;chain=r.ch;raw=r.t;orig=JSON.stringify(D);edits=0;tab='quick';$('#bar').hidden=false;stat();draw()}
+  catch(x){const h=rawBuf.subarray(0,32),pv=new TextDecoder().decode(rawBuf.subarray(0,60)).replace(/[^\x20-\x7e]/g,'.');
+   const hi=new Set(rawBuf.subarray(0,256)).size>150;
+   start(`Could not read this format.${hi?' The bytes look random, so the file is probably encrypted.':''}<br><span class="mu">If you want help adding support, send me this:</span><pre style="white-space:pre-wrap;font-size:12px;user-select:all">name: ${esc(f.name)}\nsize: ${f.size} bytes\nhex: ${hex(h)}\ntext: ${esc(pv)}</pre>`)}}}
+
+// ---- names (community lists: wheels35.github.io/CultoftheLamb) ----
+const IT={1:'Logs',2:'Stone',6:'Meat',8:'Berry bush seeds',9:'Bones',20:'Gold coins',21:'Berries',22:'Heart of the Heretic',26:'Tarot card',28:'Salmon',29:'Menticide mushroom',33:'Minnow',34:'Tuna',35:'Grass',39:'Poop',43:'Small gift',44:'Big gift',45:'Flower necklace',46:'Feather necklace',47:'Skull necklace',48:'Nature necklace',49:'Moon necklace',50:'Pumpkin',51:'Pumpkin seeds',55:'Camellia',61:'Rotten meat',62:'Follower meat',63:'Rotten follower meat',70:'Menticide mushroom spores',72:'Camellia seeds',81:'Wooden planks',82:'Stone blocks',83:'Gold nugget',86:'Gold bars',89:'Crystal shards',90:'Spider silk',91:'Crab',92:'Lobster',93:'Octopus',94:'Squid',95:'Swordfish',96:'Blowfish',97:'Beetroot',98:'Beetroot seeds',101:'Eye of the Witness',102:'Cauliflower',103:'Cauliflower seeds',105:'Morsel',114:'Holy talisman',117:'Shell'};
+const MEAL={32:'Paltry Pumpkin Soup',57:'Grassy Gruel',58:'Heart Meat Broth',59:'Splendid Vegetable Feast',60:'Tasty Fish Meal',65:'Minced Follower Meat',69:'Bowl of Poop',99:'Delicious Fish Feast',100:'Pungent Fish Stew',106:'Basic Berry Bowl',107:'Cheery Cauliflower Chowder',108:'Meager Mixed Meal',109:'Modest Mixed Meal',110:'Magnificent Mixed Meal',111:'Deadly Dish',112:'Stringy Meat Gruel',113:'Mighty Meat Feast'};
+const TAROT={0:'The Hearts I',1:'The Hearts II',2:'The Hearts III',3:'The Lovers I',4:'The Lovers II',5:'All Seeing Sun',6:'Weeping Moon',7:'Gift From Below',8:'The Arachnid',9:'Diseased Heart',10:'True Sight',11:'Fervour’s Host',12:'Death’s Door',13:'The Deal',14:'Telescope',15:'Hands of Rage',16:'Nature’s Boon',17:'The Burning Dead',18:'Ambrosia',31:'The Path',32:'Divine Strength',33:'Master of the Art',34:'Fervour’s Harvest',35:'Soul Snatcher',36:'Shield of Faith',37:'The Bomb',38:'Ichor Earned',39:'Ichor Lingered',40:'Mithridatism',41:'Blazing Trail',42:'Fortune’s Blessing',44:'Divine Curse',45:'Strength from Within',46:'Strength from Without',47:'Neptune’s Curse',48:'Rabbit’s Foot'};
+const DIV={80:'Tabernacle III',36:'Lumberyard II',78:'Shrine flame III',31:'Stone mine II',137:'Healing bay II',211:'Missionary III',124:'Outhouse II',156:'Demonic summoning circle III',126:'Devotion harvest totem',84:'Cult upgrade IV (left)',79:'Cult upgrade IV (right)',91:'Ritual cooldowns',82:'Shrine flame II',118:'Grand shelter',35:'Refinery II',140:'Bone decorations',213:'Farmer station II',14:'Compost',125:'Trap scarecrow',83:'Cult upgrade III (left)',75:'Cult upgrade III (right)',34:'Refinery',116:'Propaganda',210:'Missionary II',50:'Confession booth',155:'Demonic summoning circle II',89:'Cheaper rituals',121:'Fertiliser silo',73:'Shrine flame bundle (part 1)',81:'Shrine flame bundle (part 2)',135:'Harvest totem',144:'Janitor station',136:'Healing bay',46:'Outhouse',64:'Cult upgrade II (left)',72:'Cult upgrade II (right)',45:'Prison',33:'Lumberyard',76:'Tabernacle',32:'Stone mine',74:'Offering statue',117:'Missionary',55:'Shelter',145:'Demonic summoning circle',139:'Decorations',44:'Scarecrow',134:'Body pit',43:'Farm',51:'Sleeping beds',52:'Farming bundle'};
+const NAME={...MEAL,...IT};
+const MAPS={PlayerFoundTrinkets:TAROT,RecipesDiscovered:MEAL,UnlockedUpgrades:DIV};
+const TT={PlayerFoundTrinkets:['Tarot cards','Cards you have found'],RecipesDiscovered:['Cooking recipes','Recipes your cult can cook'],UnlockedUpgrades:['Divine inspiration tree','Buildings and cult upgrades you have unlocked']};
+const FL={PLAYER_HEALTH:'Current health',PLAYER_TOTAL_HEALTH:'Max health',PLAYER_BLUE_HEARTS:'Blue hearts',PLAYER_BLACK_HEARTS:'Black hearts',PLAYER_SPIRIT_HEARTS:'Spirit hearts',PLAYER_SPIRIT_TOTAL_HEARTS:'Max spirit hearts',PLAYER_STARTING_HEALTH:'Starting health',PLAYER_STARTING_HEALTH_CACHED:'Starting health (copy)',PLAYER_ARROW_AMMO:'Arrows now',PLAYER_ARROW_TOTAL_AMMO:'Max arrows',Level:'Lamb level',XP:'Lamb XP',AbilityPoints:'Divine inspiration points',WeaponAbilityPoints:'Weapon points',FollowerTokens:'Follower tokens',DiscipleLevel:'Disciple level',DiscipleXP:'Disciple XP',DiscipleAbilityPoints:'Disciple points',Souls:'Souls',BlackSouls:'Black souls',CurrentKeyPieces:'Key pieces',CultFaith:'Cult faith (0 to 100)',StaticFaith:'Base faith',CurrentDayIndex:'Current day',CurrentGameTime:'Game clock',CurrentCultLevel:'Cult level',playerDeaths:'Deaths',KillsInGame:'Kills',PlayTime:'Play time',FollowerCount:'Followers',StructureCount:'Buildings',DeathCount:'Deaths',PercentageCompleted:'Completion %',CURRENT_WEAPON:'Current weapon ID'};
+[1,2,3,4].forEach(n=>{FL['Dungeon'+n+'GodTears']='God tears (dungeon '+n+')';FL['Dungeon'+n+'Completed']='Dungeon '+n+' completed'});
+const nice=k=>FL[k]||k.replace(/_/g,' ').replace(/([a-z])([A-Z])/g,'$1 $2').replace(/(\d)([A-Za-z])/g,'$1 $2').replace(/^./,c=>c.toUpperCase());
+const lab=k=>`<b>${esc(nice(k))}</b><small>${esc(k)}</small>`;
+function give(id,n){const arr=get(invs()[0]);let it=arr.find(x=>x[kk(x,/^type$/i)]===id);if(it)it[kk(it,/^quantity$/i)]+=n;else{it={type:id,quantity:n,QuantityReserved:0,UnreservedQuantity:n};arr.push(it)}sync(it);edits++;stat();draw()}
+function res2(){const ps=invs();if(!ps.length)return`<div class='card'>No item list found in this file.</div>`;
+ const p=ps[0],a=get(p),have=new Set(a.map(it=>it[kk(it,/^type$/i)]));
+ const opts=Object.keys(IT).filter(i=>!have.has(+i)).sort((x,y)=>IT[x].localeCompare(IT[y])).map(i=>`<option value='${i}'>${IC[i]||''} ${esc(IT[i])}</option>`).join('');
+ const G=[[20,1000,'+1000 gold'],[1,100,'+100 logs'],[2,100,'+100 stone'],[9,100,'+100 bones'],[35,100,'+100 grass']];
+ return`<h2>Quick gifts</h2><div class='card'><div class='tools'>${G.map(([i,n,l])=>`<button data-act='give' data-id='${i}' data-n='${n}'>${l}</button>`).join('')}</div></div>
+<h2>Bulk tools</h2><div class='card'><div class='row'><span class='k'><b>Amount</b><small>used by the buttons below</small></span><input type='number' id='bulk0' value='999'></div>
+<div class='tools'><button data-act='all' data-ix='0'>Set all owned to amount</button><button data-act='raise' data-ix='0'>Raise lower ones</button><button data-act='addall'>Add every missing item</button></div>
+<div class='tools'><select id='ns'>${opts||`<option value=''>You own every known item</option>`}</select><button data-act='add2'>Add selected</button></div></div>
+<h2>You own (${a.length})</h2><input type='search' data-flt='1' placeholder='Search your items' aria-label='Search your items'><div class='card'>`+a.map((it,i)=>{const tk=kk(it,/^type$/i),qk=kk(it,/^quantity$/i),id=it[tk],nm=NAME[id]||L['t'+id];
+  return`<div class='row' data-n='${esc((nm||'').toLowerCase())}'>${ico(id)}<span class='k'><b>${esc(nm||'Unknown item')}</b><small>ID ${esc(id)}</small>${nm?'':`<input type='text' style='width:100%;margin-top:4px' placeholder='Name this item' data-lbl='t${id}'>`}</span>${inp(p.concat(i,qk),it[qk])}<button data-act='max' data-p='${esc(JSON.stringify(p.concat(i,qk)))}'>Max</button><button data-act='del' data-i='${i}' aria-label='Remove item'>×</button></div>`}).join('')+'</div>'}
+const FM=[['Name','Name'],['XPLevel','Level'],['HP','Health'],['MaxHP','Max health'],['Faith','Faith'],['Happiness','Happiness'],['Satiation','Fullness'],['Rest','Rest'],['Social','Social'],['Illness','Illness'],['Injured','Injury'],['Exhaustion','Exhaustion'],['Starvation','Starvation'],['Dissent','Dissent'],['Age','Age'],['LifeExpectancy','Life expectancy']];
+function fol2(){const ps=fols();if(!ps.length)return`<div class='card'>No follower list found in this file.</div>`;
+ const p0=ps[0],a=get(p0),nums=[...new Set(a.flatMap(f=>Object.keys(f).filter(k=>typeof f[k]==='number')))].sort();
+ const row=(i,k,l)=>`<div class='row'><span class='k'><b>${esc(l)}</b><small>${esc(k)}</small></span>${inp(p0.concat(i,k),a[i][k])}</div>`;
+ return`<h2>${a.length} follower${a.length===1?'':'s'}</h2><input type='search' data-flt='1' placeholder='Search followers by name' aria-label='Search followers'><div class='card'><div class='tools'><button data-act='heal'>Heal and cheer everyone</button></div><p class='mu'>Give every follower the same animal form:</p><div class='tools'><select id='sa'>${skinOpts('')}</select><button data-act='skinall'>Apply to all</button></div><p class='mu'>Or set one stat on every follower:</p><div class='tools'><select id='fk'>${nums.map(k=>`<option value='${esc(k)}'>${esc(nice(k))}</option>`).join('')}</select><input type='number' id='fv' value='0' style='width:100px'><button data-act='fol'>Apply to all</button></div></div>`+
+ a.map((f,i)=>{const main=FM.filter(([k])=>k in f&&typeof f[k]!=='object'),ks=new Set(main.map(m=>m[0]));
+  const rest=Object.keys(f).filter(k=>!ks.has(k)&&(f[k]===null||typeof f[k]!=='object'));
+  return`<details class='card' data-n='${esc(String(f.Name).toLowerCase())}'><summary>${aic(f.SkinName)} ${esc(f.Name)} · level ${esc(f.XPLevel??'?')} · faith ${esc(Math.round(f.Faith??0))}</summary>${skinRow(i,f,a)}${main.map(([k,l])=>row(i,k,l)).join('')}<details><summary>All other fields (${rest.length})</summary>${rest.map(k=>row(i,k,nice(k))).join('')}</details></details>`}).join('')}
+function unl2(){let h=`<p class='mu'>Tick to unlock, untick to lock. Names come from community lists, so a few may be missing. Keep a backup before unlocking everything.</p>`;
+ for(const k in MAPS){if(!Array.isArray(D[k]))continue;const m=MAPS[k],ids=Object.keys(m).sort((x,y)=>m[x].localeCompare(m[y])),other=D[k].filter(x=>!(x in m)),on=D[k].length-other.length;
+  h+=`<h2>${TT[k][0]}</h2><div class='card'><p class='mu'>${TT[k][1]}. ${on} of ${ids.length} unlocked.</p><div class='tools'><button data-act='on' data-k='${k}'>Unlock all</button><button data-act='off' data-k='${k}'>Lock all</button></div>${ids.map(i=>`<div class='row'><label><input type='checkbox' data-chk='${k}' data-id='${i}' ${D[k].includes(cv(i))?'checked':''}> ${k==='FollowerSkinsUnlocked'?aic(i):k==='PlayerFoundTrinkets'?'🃏':k==='RecipesDiscovered'?'🍲':'🛠️'} ${esc(m[i])}</label></div>`).join('')}${other.length?`<p class='mu'>Other IDs in your file, kept as they are: ${esc(other.join(', '))}</p>`:''}</div>`}
+ const ks=UL.filter(k=>!MAPS[k]&&Array.isArray(D[k])&&D[k].every(x=>typeof x!=='object'));
+ return h+`<h2>Other lists (advanced)</h2><p class='mu'>IDs separated by commas. Tap outside the box to apply.</p>`+ks.map(k=>`<div class='card'><b>${esc(nice(k))}</b> (${D[k].length})<textarea style='height:80px' data-p='${esc(JSON.stringify([k]))}' data-t='l' data-s='${D[k].some(x=>typeof x==='string')?1:0}'>${esc(D[k].join(', '))}</textarea></div>`).join('')}
+// ---- icons, review, search (original emoji icons, not game art) ----
+const IC={1:'🪵',2:'🪨',6:'🥩',8:'🌱',9:'🦴',20:'🪙',21:'🍓',22:'🫀',26:'🃏',28:'🐟',29:'🍄',33:'🐠',34:'🐟',35:'🌿',39:'💩',43:'🎁',44:'📦',45:'📿',46:'🪶',47:'💀',48:'🍃',49:'🌙',50:'🎃',51:'🌰',55:'🌺',61:'🤢',62:'🍖',63:'☠️',70:'🍄',72:'🌰',81:'🟫',82:'🧱',83:'🟡',86:'🥇',89:'💎',90:'🕸️',91:'🦀',92:'🦞',93:'🐙',94:'🦑',95:'🗡️',96:'🐡',97:'🍠',98:'🌱',101:'👁️',102:'🥦',103:'🌱',105:'🍗',114:'🧿',117:'🐚'};
+const ico=id=>`<span class='ic' aria-hidden='true'>${IC[id]||(MEAL[id]?'🍲':'❓')}</span>`;
+const AN=[[/cat|sphynx|lynx/i,'🐱'],[/dog|wolf|husky/i,'🐶'],[/pig|boar/i,'🐷'],[/deer|elk|moose/i,'🦌'],[/fox/i,'🦊'],[/rabbit|bunny|hare/i,'🐰'],[/shark|hammer/i,'🦈'],[/llama|alpaca/i,'🦙'],[/tiger|lion|leopard/i,'🐯'],[/frog|toad/i,'🐸'],[/bear|panda/i,'🐻'],[/horse|zebra|unicorn/i,'🐴'],[/cow|bull|yak/i,'🐮'],[/octo/i,'🐙'],[/crab/i,'🦀'],[/snake|turtle|lizard|croc/i,'🐍'],[/elephant/i,'🐘'],[/mouse|rat|hamster/i,'🐭'],[/monkey/i,'🐵'],[/giraffe/i,'🦒'],[/snail/i,'🐌'],[/spider/i,'🕷️'],[/fish|squid|whale|dolphin/i,'🐟']];
+const aic=s=>(AN2.find(([r])=>r.test(s||''))||AN.find(([r])=>r.test(s||''))||[0,'🐑'])[1];
+let orig='{}';
+function rev(){const A=new Map([...walk(JSON.parse(orig))].map(([p,v])=>[JSON.stringify(p),v])),B=new Map([...walk(D)].map(([p,v])=>[JSON.stringify(p),v])),ch=[];
+ for(const[k,v]of B){if(!A.has(k))ch.push([k,'(new)',v]);else if(A.get(k)!==v)ch.push([k,A.get(k),v])}
+ for(const[k,v]of A)if(!B.has(k))ch.push([k,v,'(removed)']);
+ return`<p class='mu'>${ch.length} value${ch.length===1?'':'s'} differ from the file you opened. Check this list before you save.</p>`+(ch.length?`<div class='card'>${ch.slice(0,200).map(([k,a,b])=>`<div class='row'><span class='k'><small>${esc(JSON.parse(k).join(' › '))}</small><b>${esc(a)} → ${esc(b)}</b></span></div>`).join('')}${ch.length>200?`<p class='mu'>Showing the first 200.</p>`:''}</div>`:`<div class='card'>Nothing changed yet.</div>`)}
+document.addEventListener('input',e=>{const t=e.target;if(t.dataset&&t.dataset.flt!==undefined){const s=t.value.toLowerCase();document.querySelectorAll('[data-n]').forEach(n=>{n.hidden=!n.dataset.n.includes(s)})}});
+// ---- follower skins ----
+// Names are the game’s own spellings, taken from FollowerSkinsUnlocked in a real save (plus two seen in a community post).
+const SKN={Cat:'Cat',Dog:'Dog',Pig:'Pig',Deer:'Deer',Fox:'Fox',Rabbit:'Rabbit',Hammerhead:'Hammerhead shark',Llama:'Llama',Tiger:'Tiger',Sphynx:'Sphynx cat',LadyBug:'Ladybug',Moose:'Moose',Gorilla:'Gorilla',Mosquito:'Mosquito',Goldfish:'Goldfish',Possum:'Possum',Bee:'Bee',Tapir:'Tapir',Turtle:'Turtle',Monkey:'Monkey',Narwal:'Narwhal',Panda:'Panda',Skunk:'Skunk',Anteater:'Anteater',Enchida:'Echidna',Camel:'Camel',Cthulhu:'Cthulhu',Orangutan:'Orangutan',Trout:'Trout',Robin:'Robin',Beaver:'Beaver',Lobster:'Lobster',StarBunny:'Star bunny',DogTeddy:'Teddy dog',TwitchPoggers:'Twitch Poggers',TwitchDog:'Twitch dog',TwitchDogAlt:'Twitch dog (alt)',TwitchCat:'Twitch cat',TwitchMouse:'Twitch mouse',Lion:'Lion',Penguin:'Penguin',Kiwi:'Kiwi',Pelican:'Pelican'};
+MAPS.FollowerSkinsUnlocked=SKN;TT.FollowerSkinsUnlocked=['Follower skins','Animal forms your cult can use. Unticked ones are not unlocked yet.'];
+const cv=i=>isNaN(+i)?i:+i;
+const AN2=[[/lady/i,'🐞'],[/bee/i,'🐝'],[/narwal/i,'🐋'],[/gorilla/i,'🦍'],[/mosquito/i,'🦟'],[/goldfish/i,'🐠'],[/possum/i,'🐭'],[/tapir/i,'🐗'],[/turtle/i,'🐢'],[/anteater|enchida/i,'🦔'],[/camel/i,'🐫'],[/cthulhu/i,'🐙'],[/orangutan/i,'🦧'],[/trout/i,'🐟'],[/robin|pelican|kiwi/i,'🐦'],[/beaver/i,'🦫'],[/lobster/i,'🦞'],[/starbunny/i,'⭐'],[/teddy/i,'🧸'],[/twitch/i,'🟣'],[/lion/i,'🦁'],[/penguin/i,'🐧'],[/skunk/i,'🦨'],[/hammerhead/i,'🦈'],[/monkey/i,'🐒'],[/panda/i,'🐼'],[/moose/i,'🦌']];
+function skinOpts(cur){const un=[...new Set([...(D.FollowerSkinsUnlocked||[]),cur].filter(Boolean))],lk=Object.keys(SKN).filter(n=>!un.includes(n)),srt=x=>x.sort((p,q)=>(SKN[p]||p).localeCompare(SKN[q]||q)),o=n=>`<option value='${esc(n)}' ${n===cur?'selected':''}>${aic(n)} ${esc(SKN[n]||n)}</option>`;
+ return`<optgroup label='Unlocked in your save'>${srt(un).map(o).join('')}</optgroup>`+(lk.length?`<optgroup label='Not unlocked yet'>${srt(lk).map(o).join('')}</optgroup>`:'')}
+function skinRow(i,f,a){return`<div class='row'><span class='ic'>${aic(f.SkinName)}</span><span class='k'><b>Animal form</b><small>${esc(f.SkinName)}</small></span><select data-skin='${i}'>${skinOpts(f.SkinName)}</select></div><div class='row'><span class='k'><b>Copy look from</b><small class='sknote'>The safest way to change a form</small></span><select data-copy='${i}'><option value=''>Choose follower</option>${a.map((x,j)=>j===i?'':`<option value='${j}'>${aic(x.SkinName)} ${esc(x.Name)} (${esc(x.SkinName)})</option>`).join('')}</select></div>`}
+function setSkin(i,n,t,src){const a=get(fols()[0]),f=a[i],m=src||a.find((x,j)=>j!==i&&x.SkinName===n);let note;f.SkinName=n;
+ if(m&&m!==f){f.SkinCharacter=m.SkinCharacter;f.SkinVariation=m.SkinVariation;f.SkinColour=m.SkinColour;note='Look numbers copied from '+m.Name+'.'}
+ else note='Only the name changed. This form’s skin number is not known, so if the look does not change in the game, use “Copy look from” on a follower who already has it.';
+ edits++;stat();if(t){const r=t.closest('.row');r.querySelector('.ic').textContent=aic(n);r.querySelector('small').textContent=n;const nt=t.closest('details').querySelector('.sknote');if(nt)nt.textContent=note}}
+function copyLook(i,j,t){const a=get(fols()[0]),f=a[i],s=a[j];['SkinName','SkinCharacter','SkinVariation','SkinColour'].forEach(k=>{if(k in s)f[k]=s[k]});edits++;stat();
+ if(t){const d=t.closest('details'),sel=d.querySelector('[data-skin]'),r=sel.closest('.row');sel.value=f.SkinName;r.querySelector('.ic').textContent=aic(f.SkinName);r.querySelector('small').textContent=f.SkinName;d.querySelector('.sknote').textContent='Copied the whole look from '+s.Name+'.'}}
+// ---- save-specific ----
+function sync(it){if(!it||typeof it!=='object')return;const q=kk(it,/^quantity$/i),r=kk(it,/^QuantityReserved$/i),u=kk(it,/^UnreservedQuantity$/i);if(q&&u)it[u]=Math.max(0,it[q]-(r?it[r]:0))}
+const GR=[['Save slot info (meta file)',['FollowerCount','StructureCount','DeathCount','Day','Difficulty','PlayTime','PercentageCompleted','GameBeaten','Dungeon1Completed','Dungeon2Completed','Dungeon3Completed','Dungeon4Completed']],
+['Hearts and health',['PLAYER_HEALTH','PLAYER_TOTAL_HEALTH','PLAYER_BLUE_HEARTS','PLAYER_BLACK_HEARTS','PLAYER_SPIRIT_HEARTS','PLAYER_SPIRIT_TOTAL_HEARTS','PLAYER_STARTING_HEALTH','PLAYER_STARTING_HEALTH_CACHED','PLAYER_HEALTH_MODIFIED']],
+['Level and points',['Level','XP','AbilityPoints','WeaponAbilityPoints','DiscipleLevel','DiscipleXP','DiscipleAbilityPoints','FollowerTokens','Souls','BlackSouls','CurrentKeyPieces','Dungeon1GodTears','Dungeon2GodTears','Dungeon3GodTears','Dungeon4GodTears']],
+['Cult',['CultFaith','StaticFaith','CurrentDayIndex','CurrentGameTime','CurrentCultLevel','TempleLevel','ShrineLevel','IngredientsCapacityLevel','FoodCapacityLevel','LogCapacityLevel','StoneCapacityLevel']],
+['Doctrine',[/^Doctrine_/,'CompletedDoctrineStones','DoctrineCurrentCount','DoctrineTargetCount']],
+['Combat and weapons',['CURRENT_WEAPON','SwordLevel','DaggerLevel','AxeLevel','HammerLevel','GauntletLevel','FireballLevel','EnemyBlastLevel','MegaSlashLevel','ProjectileAOELevel','TentaclesLevel','VortexLevel','PLAYER_ARROW_AMMO','PLAYER_ARROW_TOTAL_AMMO','LuckMultiplier','SpecialAttackDamageMultiplier','DodgeDistanceMultiplier','ProjectileMoveSpeedMultiplier','EnemyHealthMultiplier','BossHealthMultiplier','NoHeartDrops']],
+['Stats',['playerDeaths','KillsInGame','MealsCooked','sacrificesCompleted','weddingsPerformed','FishCaughtTotal','DisciplesCreated']],
+['Features switched on',['AllowBuilding','TailorEnabled','HappinessEnabled','PrayerEnabled','TeachingsEnabled','SchedulingEnabled','XPEnabled','EnabledSpells','EnabledHealing','BonesEnabled','BuildShrineEnabled','CanBuildShrine']]];
+function quick2(){let h='<p class="mu">Change a value, then tap Save file. Only fields present in your file are shown.</p><div class="tools"><button data-act="boost">Starter boost</button><button data-act="fill">Refill hearts</button><button data-act="faith">Cult faith to 100</button></div>';
+ for(const[n,ks]of GR){const ps=[];for(const k of ks)(typeof k==='string'?[k]:Object.keys(D).filter(x=>k.test(x))).forEach(x=>{if(x in D&&D[x]!==null&&typeof D[x]!=='object'&&!ps.includes(x))ps.push(x)});
+  if(ps.length)h+=`<h2>${n}</h2><div class="card">`+ps.map(x=>`<div class="row"><span class="k">${lab(x)}</span>${inp([x],D[x])}</div>`).join('')+'</div>'}
+ return h+(h.includes('class="card"')?'':'<div class="card">No known fields found. Open Search to browse every value.</div>')}
+const UL=['UnlockedFleeces','UnlockedClothing','PlayerFoundTrinkets','UnlockedStructures','UnlockedUpgrades','UnlockedSermonsAndRituals','MechanicsUnlocked','FollowerSkinsUnlocked','RecipesDiscovered','CursePool','WeaponPool'];
+function unl(){const ks=UL.filter(k=>Array.isArray(D[k])&&D[k].every(x=>typeof x!=='object'));
+ return '<p class="mu">Each list holds the IDs the game has unlocked. Add or remove entries, separated by commas, then tap outside the box. An ID the game does not know may cause problems, so add a few at a time and keep a backup.</p>'+(ks.length?ks.map(k=>`<h2>${k} (${D[k].length})</h2><div class="card"><textarea style="height:90px" data-p="${esc(JSON.stringify([k]))}" data-t="l" data-s="${D[k].some(x=>typeof x==='string')?1:0}">${esc(D[k].join(', '))}</textarea></div>`).join(''):'<div class="card">No unlock lists found in this file.</div>')}
+// ---- formats ----
+const hex=b=>[...b].map(n=>n.toString(16).padStart(2,'0')).join(' ');
+async function zip(u,m,d){const S=d==='d'?DecompressionStream:CompressionStream;return new Uint8Array(await new Response(new Blob([u]).stream().pipeThrough(new S(m))).arrayBuffer())}
+function mpDec(u){let i=0;const dv=new DataView(u.buffer,u.byteOffset,u.length),td=new TextDecoder();
+ const str=n=>{const s=td.decode(u.subarray(i,i+n));i+=n;return s};
+ const arr=n=>{const a=[];for(let j=0;j<n;j++)a.push(r());return a};
+ const map=n=>{const o={};for(let j=0;j<n;j++){const k=r();o[k]=r()}return o};
+ const bin=n=>{let s='bin64:';for(const x of u.subarray(i,i+n))s+=String.fromCharCode(x);i+=n;return 'bin64:'+btoa(s.slice(6))};
+ const g=(f,n)=>{const v=dv[f](i);i+=n;return v};
+ function r(){const c=u[i++];
+  if(c===undefined)throw Error('eof');
+  if(c<0x80)return c;if(c>=0xe0)return c-256;if(c>=0xa0&&c<=0xbf)return str(c&31);
+  if(c>=0x90&&c<=0x9f)return arr(c&15);if(c>=0x80&&c<=0x8f)return map(c&15);
+  switch(c){case 0xc0:return null;case 0xc2:return false;case 0xc3:return true;
+  case 0xc4:return bin(u[i++]);case 0xc5:return bin(g('getUint16',2));case 0xc6:return bin(g('getUint32',4));
+  case 0xca:return g('getFloat32',4);case 0xcb:return g('getFloat64',8);
+  case 0xcc:return u[i++];case 0xcd:return g('getUint16',2);case 0xce:return g('getUint32',4);case 0xcf:return Number(g('getBigUint64',8));
+  case 0xd0:return g('getInt8',1);case 0xd1:return g('getInt16',2);case 0xd2:return g('getInt32',4);case 0xd3:return Number(g('getBigInt64',8));
+  case 0xd9:return str(u[i++]);case 0xda:return str(g('getUint16',2));case 0xdb:return str(g('getUint32',4));
+  case 0xdc:return arr(g('getUint16',2));case 0xdd:return arr(g('getUint32',4));case 0xde:return map(g('getUint16',2));case 0xdf:return map(g('getUint32',4))}
+  throw Error('unsupported type')}
+ const v=r();if(i!==u.length)throw Error('trailing bytes');return v}
+function mpEnc(v){const o=[],te=new TextEncoder();
+ const u32=n=>[n>>>24,(n>>>16)&255,(n>>>8)&255,n&255],u16=n=>[n>>8,n&255];
+ const hd=(n,a,b,c)=>{n<16?o.push(a|n):n<65536?o.push(b,...u16(n)):o.push(c,...u32(n))};
+ (function e(v){
+  if(v===null)o.push(0xc0);else if(v===true)o.push(0xc3);else if(v===false)o.push(0xc2);
+  else if(typeof v==='number'){
+   if(Number.isInteger(v)){
+    if(v>=0&&v<128)o.push(v);else if(v<0&&v>=-32)o.push(v+256);
+    else if(v>=0&&v<=0xffffffff)o.push(0xce,...u32(v));
+    else if(v<0&&v>=-2147483648)o.push(0xd2,...u32(v>>>0));
+    else{const b=new DataView(new ArrayBuffer(8));v>=0?b.setBigUint64(0,BigInt(v)):b.setBigInt64(0,BigInt(v));o.push(v>=0?0xcf:0xd3,...new Uint8Array(b.buffer))}
+   }else{const b=new DataView(new ArrayBuffer(8));b.setFloat64(0,v);o.push(0xcb,...new Uint8Array(b.buffer))}}
+  else if(typeof v==='string'){
+   if(v.startsWith('bin64:')){const s=atob(v.slice(6));o.push(0xc6,...u32(s.length));for(let i=0;i<s.length;i++)o.push(s.charCodeAt(i))}
+   else{const b=te.encode(v),n=b.length;n<32?o.push(0xa0|n):n<256?o.push(0xd9,n):n<65536?o.push(0xda,...u16(n)):o.push(0xdb,...u32(n));for(const x of b)o.push(x)}}
+  else if(Array.isArray(v)){hd(v.length,0x90,0xdc,0xdd);v.forEach(e)}
+  else{const k=Object.keys(v);hd(k.length,0x80,0xde,0xdf);k.forEach(x=>{e(x);e(v[x])})}
+ })(v);return Uint8Array.from(o)}
+async function load(u,ch=[]){
+ if(u[0]===0x5a&&u[1]===0x42&&u[2]===0x1f&&u[3]===0x8b){const g=u.subarray(2);
+  for(let k=0;k<=512&&k<g.length-18;k++){try{const d=await zip(k?g.subarray(0,g.length-k):g,'gzip','d');
+   bom=d[0]===0xef&&d[1]===0xbb&&d[2]===0xbf;const r=await load(d,ch.concat('zb'));zb={hd:u.slice(0,12),tail:u.slice(u.length-k)};return r}catch(e){}}}
+ if(u[0]===0x1f&&u[1]===0x8b)return load(await zip(u,'gzip','d'),ch.concat('gzip'));
+ if(u[0]===0x78&&[1,0x5e,0x9c,0xda].includes(u[1])){try{return await load(await zip(u,'deflate','d'),ch.concat('zlib'))}catch(e){}}
+ const t=new TextDecoder().decode(u).replace(/^\uFEFF/,'').replace(/\0+$/,'').trim();
+ if(/^[\[{]/.test(t)){try{return{D:JSON.parse(t),ch,t}}catch(e){}}
+ if(/^[A-Za-z0-9+\/=\r\n_-]{16,}$/.test(t)&&ch.length<4){try{const s=atob(t.replace(/\s/g,'').replace(/-/g,'+').replace(/_/g,'/'));return await load(Uint8Array.from(s,c=>c.charCodeAt(0)),ch.concat('b64'))}catch(e){}}
+ try{const d=mpDec(u);if(d&&typeof d==='object')return{D:d,ch:ch.concat('mp'),t:''}}catch(e){}
+ throw Error('unknown')}
+async function enc(){const mp=chain.includes('mp');
+ let u=mp?mpEnc(D):new TextEncoder().encode((bom?'\uFEFF':'')+JSON.stringify(D,null,raw.includes('\n')?2:0));
+ for(const c of chain.filter(c=>c!=='mp').reverse()){if(c==='zb'){u=await zip(u,'gzip','c');if(zb.hd[5]===0)u.set(zb.hd.subarray(2,12),0);const o=new Uint8Array(2+u.length+zb.tail.length);o.set([0x5a,0x42],0);o.set(u,2);o.set(zb.tail,2+u.length);u=o}else if(c==='gzip')u=await zip(u,'gzip','c');else if(c==='zlib')u=await zip(u,'deflate','c');else{let s='';u.forEach(x=>s+=String.fromCharCode(x));u=new TextEncoder().encode(btoa(s))}}
+ return u}
+// ---- actions ----
+function dl(name,text){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type:'application/octet-stream'}));a.download=name;document.body.appendChild(a);a.click();a.remove()}
+document.addEventListener('click',e=>{const t=e.target.closest('button');if(!t)return;
+ if(t.dataset.tab){tab=t.dataset.tab;draw();return}
+ const a=t.dataset.act;
+ if(a==='max'){const p=JSON.parse(t.dataset.p);put(p,9999);if(p[0]==='items')sync(get(p.slice(0,-1)));draw()}
+ if(a==='all'||a==='raise'){const ix=+t.dataset.ix,arr=get(invs()[ix]),v=Number($('#bulk'+ix).value);if(isNaN(v))return;
+  arr.forEach(it=>{const q=kk(it,/^quantity$/i);if(a==='all'||it[q]<v){it[q]=v;sync(it);edits++}});stat();draw()}
+ if(a==='fol'){const k=$('#fk').value,v=Number($('#fv').value);if(isNaN(v))return;get(fols()[0]).forEach(f=>{if(typeof f[k]==='number'){f[k]=v;edits++}});stat();draw()}
+ if(a==='heal'){get(fols()[0]).forEach(f=>{const S=(k,v)=>{if(typeof f[k]==='number')f[k]=v};S('HP',f.MaxHP);S('Illness',0);S('Injured',0);S('Exhaustion',0);S('Starvation',0);S('Satiation',100);S('Rest',100);S('Social',100);S('Happiness',100);S('Faith',100);S('Dissent',0);S('Drunk',0)});edits++;stat();draw()}
+ if(a==='fill'&&'PLAYER_HEALTH' in D){D.PLAYER_HEALTH=D.PLAYER_TOTAL_HEALTH;edits++;stat();draw()}
+ if(a==='faith'&&'CultFaith' in D){D.CultFaith=100;edits++;stat();draw()}
+ if(a==='add'){const ix=+t.dataset.ix,arr=get(invs()[ix]),ty=Number($('#nt'+ix).value),q=Number($('#nq'+ix).value);if($('#nt'+ix).value===''||isNaN(ty)||isNaN(q))return;const ex=arr.find(it=>it[kk(it,/^type$/i)]===ty);if(ex){ex[kk(ex,/^quantity$/i)]=q;sync(ex)}else arr.push({type:ty,quantity:q,QuantityReserved:0,UnreservedQuantity:q});edits++;stat();draw()}
+ if(a==='give')give(+t.dataset.id,+t.dataset.n);
+ if(a==='del'){get(invs()[0]).splice(+t.dataset.i,1);edits++;stat();draw()}
+ if(a==='addall'||a==='add2'){const arr=get(invs()[0]),v=Number($('#bulk0').value);if(isNaN(v))return;const mk=ty=>{const ex=arr.find(it=>it[kk(it,/^type$/i)]===ty);if(ex){ex[kk(ex,/^quantity$/i)]=v;sync(ex)}else arr.push({type:ty,quantity:v,QuantityReserved:0,UnreservedQuantity:v})};
+  if(a==='add2'){const s=$('#ns').value;if(s==='')return;mk(+s)}else Object.keys(IT).forEach(i=>{if(+i!==26&&!arr.some(it=>it[kk(it,/^type$/i)]===+i))mk(+i)});edits++;stat();draw()}
+ if(a==='on'||a==='off'){const k=t.dataset.k,s=new Set(D[k]);Object.keys(MAPS[k]).forEach(i=>a==='on'?s.add(cv(i)):s.delete(cv(i)));D[k]=[...s];edits++;stat();draw()}
+ if(a==='boost'){if(invs().length)[[20,1000],[1,100],[2,100],[9,100],[35,100]].forEach(([i,n])=>give(i,n));if('PLAYER_HEALTH' in D)D.PLAYER_HEALTH=D.PLAYER_TOTAL_HEALTH;if('CultFaith' in D)D.CultFaith=100;edits++;stat();draw()}
+ if(a==='skinall'){const n=$('#sa').value,fa=get(fols()[0]),src=fa.find(x=>x.SkinName===n);fa.forEach((f,i)=>setSkin(i,n,null,src));draw()}
+ if(a==='raw'){try{D=JSON.parse($('#rw').value);edits++;stat();$('#re').textContent='';draw()}catch(x){$('#re').textContent='Invalid JSON: '+x.message}}
+ if(t.id==='sv')enc().then(u=>{dl(fname,u);edits=0;stat()})
+ if(t.id==='rs'){if(t.dataset.arm!=='1'){t.dataset.arm='1';t.textContent='Tap again';setTimeout(()=>{t.dataset.arm='';t.textContent='Reset'},3000);return}t.dataset.arm='';t.textContent='Reset';load(rawBuf).then(r=>{D=r.D;chain=r.ch;raw=r.t;edits=0;stat();draw()})}
+ if(t.id==='bk')dl('backup_'+new Date().toISOString().slice(0,10)+'_'+fname,rawBuf)});
+document.addEventListener('input',e=>{if(e.target.id==='q'){q=e.target.value;$('#sr').innerHTML=srRows()}if(e.target.id==='no'){numOnly=e.target.checked;$('#sr').innerHTML=srRows()}});
+start();
+</script></body></html>
